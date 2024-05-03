@@ -1,0 +1,17 @@
+volumes:
+  dev-env:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: volume
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    tty: true
+    volumes:
+      - dev-env:/home/root
+    # other service configurations...
