@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import logging
 import os
+import pickle
 import random
 import string
 import sys
-import pickle
-import logging
 from typing import List
 
 from eth import Chain, constants
 from eth.chains.mainnet import (
-    MAINNET_GENESIS_HEADER,
-    HOMESTEAD_MAINNET_BLOCK,
-    TANGERINE_WHISTLE_MAINNET_BLOCK,
-    SPURIOUS_DRAGON_MAINNET_BLOCK,
     BYZANTIUM_MAINNET_BLOCK,
-    PETERSBURG_MAINNET_BLOCK
+    HOMESTEAD_MAINNET_BLOCK,
+    MAINNET_GENESIS_HEADER,
+    PETERSBURG_MAINNET_BLOCK,
+    SPURIOUS_DRAGON_MAINNET_BLOCK,
+    TANGERINE_WHISTLE_MAINNET_BLOCK,
 )
-from eth.constants import ZERO_ADDRESS, CREATE_CONTRACT_ADDRESS
+from eth.constants import CREATE_CONTRACT_ADDRESS, ZERO_ADDRESS
 from eth.db.atomic import AtomicDB
 from eth.db.backends.memory import MemoryDB
 from eth.rlp.accounts import Account
@@ -26,32 +26,31 @@ from eth.rlp.headers import BlockHeader
 from eth.tools.logging import DEBUG2_LEVEL_NUM
 from eth.validation import validate_uint256
 from eth.vm.spoof import SpoofTransaction
-from eth_utils import to_canonical_address, decode_hex, encode_hex
-from web3 import HTTPProvider
-from web3 import Web3
+from eth_utils import decode_hex, encode_hex, to_canonical_address
+from web3 import HTTPProvider, Web3
 
 from .storage_emulation import (
+    ByzantiumVMForFuzzTesting,
     FrontierVMForFuzzTesting,
     HomesteadVMForFuzzTesting,
-    TangerineWhistleVMForFuzzTesting,
+    PetersburgVMForFuzzTesting,
     SpuriousDragonVMForFuzzTesting,
-    ByzantiumVMForFuzzTesting,
-    PetersburgVMForFuzzTesting
+    TangerineWhistleVMForFuzzTesting,
 )
 
 # 获取根目录
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + '/../'
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/../"
 # 将根目录添加到path中
 sys.path.append(BASE_DIR)
+from eth_abi import encode_abi
 from fuzzer.utils import settings
 from fuzzer.utils.utils import initialize_logger
-from eth_abi import encode_abi
 
 
 class InstrumentedEVM:
     def __init__(self, eth_node_ip=None, eth_node_port=None) -> None:
         chain_class = Chain.configure(
-            __name__='Blockchain',
+            __name__="Blockchain",
             vm_configuration=(
                 (constants.GENESIS_BLOCK_NUMBER, FrontierVMForFuzzTesting),
                 (HOMESTEAD_MAINNET_BLOCK, HomesteadVMForFuzzTesting),
@@ -64,16 +63,18 @@ class InstrumentedEVM:
 
         class MyMemoryDB(MemoryDB):
             def __init__(self) -> None:
-                self.kv_store = {'storage': dict(), 'account': dict(), 'code': dict()}
+                self.kv_store = {"storage": dict(), "account": dict(), "code": dict()}
 
             def rst(self) -> None:
-                self.kv_store = {'storage': dict(), 'account': dict(), 'code': dict()}
+                self.kv_store = {"storage": dict(), "account": dict(), "code": dict()}
 
         if eth_node_ip and eth_node_port and settings.REMOTE_FUZZING:
-            self.w3 = Web3(HTTPProvider('http://%s:%s' % (eth_node_ip, eth_node_port)))
+            self.w3 = Web3(HTTPProvider("http://%s:%s" % (eth_node_ip, eth_node_port)))
         else:
             self.w3 = None
-        self.chain = chain_class.from_genesis_header(AtomicDB(MyMemoryDB()), MAINNET_GENESIS_HEADER)
+        self.chain = chain_class.from_genesis_header(
+            AtomicDB(MyMemoryDB()), MAINNET_GENESIS_HEADER
+        )
         self.logger = initialize_logger("EVM")
         self.accounts = list()
         self.snapshot = None
@@ -85,7 +86,12 @@ class InstrumentedEVM:
 
     def get_cached_block_by_id(self, block_number):
         block = None
-        with open(os.path.dirname(os.path.abspath(__file__)) + "/" + ".".join([str(block_number), "block"]), "rb") as f:
+        with open(
+            os.path.dirname(os.path.abspath(__file__))
+            + "/"
+            + ".".join([str(block_number), "block"]),
+            "rb",
+        ) as f:
             block = pickle.load(f)
         return block
 
@@ -93,76 +99,102 @@ class InstrumentedEVM:
     def storage_emulator(self):
         return self.vm.state._account_db
 
-    def set_vm(self, block_identifier='latest'):
+    def set_vm(self, block_identifier="latest"):
         _block = None
         if self.w3:
-            if block_identifier == 'latest':
+            if block_identifier == "latest":
                 block_identifier = self.w3.eth.blockNumber
             validate_uint256(block_identifier)
             _block = self.w3.eth.getBlock(block_identifier)
         if not _block:
-            if block_identifier in [HOMESTEAD_MAINNET_BLOCK, BYZANTIUM_MAINNET_BLOCK, PETERSBURG_MAINNET_BLOCK]:
+            if block_identifier in [
+                HOMESTEAD_MAINNET_BLOCK,
+                BYZANTIUM_MAINNET_BLOCK,
+                PETERSBURG_MAINNET_BLOCK,
+            ]:
                 _block = self.get_cached_block_by_id(block_identifier)
             else:
                 self.logger.error("Unknown block identifier.")
                 sys.exit(-4)
-        block_header = BlockHeader(difficulty=_block.difficulty,
-                                   block_number=_block.number,
-                                   gas_limit=_block.gasLimit,
-                                   timestamp=_block.timestamp,
-                                   coinbase=ZERO_ADDRESS,  # default value
-                                   parent_hash=_block.parentHash,
-                                   uncles_hash=_block.uncles,
-                                   state_root=_block.stateRoot,
-                                   transaction_root=_block.transactionsRoot,
-                                   receipt_root=_block.receiptsRoot,
-                                   bloom=0,  # default value
-                                   gas_used=_block.gasUsed,
-                                   extra_data=_block.extraData,
-                                   mix_hash=_block.mixHash,
-                                   nonce=_block.nonce)
+        block_header = BlockHeader(
+            difficulty=_block.difficulty,
+            block_number=_block.number,
+            gas_limit=_block.gasLimit,
+            timestamp=_block.timestamp,
+            coinbase=ZERO_ADDRESS,  # default value
+            parent_hash=_block.parentHash,
+            uncles_hash=_block.uncles,
+            state_root=_block.stateRoot,
+            transaction_root=_block.transactionsRoot,
+            receipt_root=_block.receiptsRoot,
+            bloom=0,  # default value
+            gas_used=_block.gasUsed,
+            extra_data=_block.extraData,
+            mix_hash=_block.mixHash,
+            nonce=_block.nonce,
+        )
         self.vm = self.chain.get_vm(block_header)
 
     def execute(self, tx, debug=True):  # debug默认是False
         if debug:
-            logging.getLogger('eth.vm.computation.Computation')
-            logging.basicConfig(level=DEBUG2_LEVEL_NUM)
+            logging.getLogger("eth.vm.computation.Computation")
+            logging.basicConfig(level=DEBUG2_LEVEL_NUM, stream=sys.stdout)
         return self.vm.state.apply_transaction(tx)
 
     def reset(self):
         self.storage_emulator._raw_store_db.wrapped_db.rst()
 
-    def create_fake_account(self, address, nonce=0, balance=settings.ACCOUNT_BALANCE, code='', storage=None):
+    def create_fake_account(
+        self, address, nonce=0, balance=settings.ACCOUNT_BALANCE, code="", storage=None
+    ):
         if storage is None:
             storage = {}
         address = to_canonical_address(address)
         account = Account(nonce=nonce, balance=balance)
         self.vm.state._account_db._set_account(address, account)
-        if code and code != '':
+        if code and code != "":
             self.vm.state._account_db.set_code(address, code)
         if storage:
             for k, v in storage.items():
-                self.vm.state._account_db.set_storage(address, int.from_bytes(decode_hex(k), byteorder="big"),
-                                                      int.from_bytes(decode_hex(v), byteorder="big"))
-        self.logger.debug("Created account %s with balance %s", encode_hex(address), account.balance)
+                self.vm.state._account_db.set_storage(
+                    address,
+                    int.from_bytes(decode_hex(k), byteorder="big"),
+                    int.from_bytes(decode_hex(v), byteorder="big"),
+                )
+        self.logger.debug(
+            "Created account %s with balance %s", encode_hex(address), account.balance
+        )
         return encode_hex(address)
 
     def has_account(self, address):
         address = to_canonical_address(address)
         return self.vm.state._account_db._has_account(address)
 
-    def deploy_contract(self, creator, bin_code, amount=0, gas=settings.GAS_LIMIT, gas_price=settings.GAS_PRICE,
-                        debug=False, deploy_args: List[str] = None, deploy_mode=1):
+    def deploy_contract(
+        self,
+        creator,
+        bin_code,
+        amount=0,
+        gas=settings.GAS_LIMIT,
+        gas_price=settings.GAS_PRICE,
+        debug=False,
+        deploy_args: List[str] = None,
+        deploy_mode=1,
+    ):
         """
         部署合约
         """
         if deploy_args is not None:
-            assert len(deploy_args) % 3 == 0, "deploy_args必须是3的倍数, [name, type, name对应的contract或者YA_DO_NOT_KNOW]"
+            assert (
+                len(deploy_args) % 3 == 0
+            ), "deploy_args必须是3的倍数, [name, type, name对应的contract或者YA_DO_NOT_KNOW]"
             encode_types = []
             encode_values = []
             for i in range(0, len(deploy_args), 3):
-                param_name, param_type, param_value = deploy_args[i:i + 3]
-                if (param_type == "address" or param_type == "contract") and param_value != "YA_DO_NOT_KNOW":
+                param_name, param_type, param_value = deploy_args[i : i + 3]
+                if (
+                    param_type == "address" or param_type == "contract"
+                ) and param_value != "YA_DO_NOT_KNOW":
                     encode_types.append("address")
                     if deploy_mode == 1:
                         encode_values.append(settings.TRANS_INFO[param_value])
@@ -250,15 +282,24 @@ class InstrumentedEVM:
         else:
             self.vm.state.fuzzed_balance = None
 
-        if "call_return" in global_state and global_state["call_return"] is not None \
-                and len(global_state["call_return"]) > 0:
+        if (
+            "call_return" in global_state
+            and global_state["call_return"] is not None
+            and len(global_state["call_return"]) > 0
+        ):
             self.vm.state.fuzzed_call_return = global_state["call_return"]
-        if "extcodesize" in global_state and global_state["extcodesize"] is not None \
-                and len(global_state["extcodesize"]) > 0:
+        if (
+            "extcodesize" in global_state
+            and global_state["extcodesize"] is not None
+            and len(global_state["extcodesize"]) > 0
+        ):
             self.vm.state.fuzzed_extcodesize = global_state["extcodesize"]
 
         environment = input["environment"]
-        if "returndatasize" in environment and environment["returndatasize"] is not None:
+        if (
+            "returndatasize" in environment
+            and environment["returndatasize"] is not None
+        ):
             self.vm.state.fuzzed_returndatasize = environment["returndatasize"]
 
         self.storage_emulator.set_balance(from_account, settings.ACCOUNT_BALANCE)
@@ -281,7 +322,10 @@ class InstrumentedEVM:
         self.storage_emulator.discard(self.snapshot)
 
     def get_accounts(self):
-        return [encode_hex(x) for x in self.storage_emulator._raw_store_db.wrapped_db["account"].keys()]
+        return [
+            encode_hex(x)
+            for x in self.storage_emulator._raw_store_db.wrapped_db["account"].keys()
+        ]
 
     def set_vm_by_name(self, EVM_VERSION):
         if EVM_VERSION == "homestead":
@@ -291,9 +335,13 @@ class InstrumentedEVM:
         elif EVM_VERSION == "petersburg":
             self.set_vm(PETERSBURG_MAINNET_BLOCK)
         else:
-            raise Exception("Unknown EVM version, please choose either 'homestead', 'byzantium' or 'petersburg'.")
+            raise Exception(
+                "Unknown EVM version, please choose either 'homestead', 'byzantium' or 'petersburg'."
+            )
 
     def create_fake_accounts(self):
-        self.accounts.append(self.create_fake_account("0xcafebabecafebabecafebabecafebabecafebabe"))
+        self.accounts.append(
+            self.create_fake_account("0xcafebabecafebabecafebabecafebabecafebabe")
+        )
         for address in settings.ATTACKER_ACCOUNTS:
             self.accounts.append(self.create_fake_account(address))

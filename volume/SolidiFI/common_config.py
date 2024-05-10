@@ -1,4 +1,4 @@
-contract_orders = [i for i in range(1, 11)]
+contract_orders = [i for i in range(1, 51)]
 
 bug_types = [
     {
@@ -42,19 +42,19 @@ bug_types = [
         "tool": "Slither",
         "bugs": [
             "Re-entrancy",
-            # "Timestamp-Dependency",
-            # "Unhandled-Exceptions",
-            # "tx.origin",
+            "Timestamp-Dependency",
+            "Unhandled-Exceptions",
+            "tx.origin",
         ],
     },
     {
         "tool": "CrossFuzz",
         "bugs": [
             # Valid
-            "Overflow-Underflow",
+            # "Overflow-Underflow",
             "Re-entrancy",
-            "TOD",
-            "Unhandled-Exceptions",
+            # "TOD",
+            # "Unhandled-Exceptions",
             # Invalid
             # "Timestamp-Dependency",
             # "Unchecked-Send",

@@ -1,14 +1,18 @@
 #!/usr/bin/python3
 
+import glob
+import os
+import shutil
+import sys
+from time import perf_counter
+
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
-import matplotlib as mpl
-import solidifi
-import inspection
-import os, sys
-import shutil, glob
-from common_config import bug_types, contract_names_per_file, contract_orders
 
+import inspection
+import solidifi
+from common_config import bug_types, contract_names_per_file, contract_orders
 
 # tools = ["Oyente", "Securify", "Mythril", "Smartcheck", "Manticore","Slither"]
 tools = []
@@ -40,6 +44,7 @@ def evaluate_tools():
         os.system(mv_cmd)
 
     # check the generated buggy contracts
+
     for tool in tools:
 
         tool_main_dir = os.path.join("tool_results", tool)
@@ -53,16 +58,18 @@ def evaluate_tools():
             injected_scs = os.path.join(tool_buggy_sc, bug_type)
 
             for buggy_sc in glob.glob(injected_scs + "/*.sol"):
-                head, tail = os.path.split(buggy_sc)
-                result_file = tool_result_per_bug + "/" + tail + ".txt"
+                buggy_sc_filepath, buggy_sc_filename = os.path.split(buggy_sc)
+                result_file = tool_result_per_bug + "/" + buggy_sc_filename + ".txt"
                 if tool in ("Slither", "Oyente"):
-                    result_file = tool_result_per_bug + "/" + tail + ".json"
+                    result_file = (
+                        tool_result_per_bug + "/" + buggy_sc_filename + ".json"
+                    )
 
                 if tool == "Oyente":
                     # Oyente command
                     tool_cmd = 'docker run -i -t -v {0} luongnguyen/oyente bash -c " cd oyente ; python oyente.py -ce -j -s ../contracts/{1} " >{2} '.format(
                         os.path.join(os.getcwd(), injected_scs) + ":/oyente/contracts",
-                        tail,
+                        buggy_sc_filename,
                         result_file,
                     )
                     os.system(tool_cmd)
@@ -92,14 +99,14 @@ def evaluate_tools():
                     cs_names = [
                         names["names"]
                         for names in contract_names_per_file
-                        if names["file"] == tail
+                        if names["file"] == buggy_sc_filename
                     ]
 
                     for cs_name in cs_names[0]:
                         result_file = (
                             tool_result_per_bug
                             + "/"
-                            + tail[0 : len(tail) - 4]
+                            + buggy_sc_filename[0 : len(buggy_sc_filename) - 4]
                             + "."
                             + cs_name
                             + ".txt"
@@ -119,20 +126,20 @@ def evaluate_tools():
 
                 elif tool == "Slither":
                     # Slither command
-                    tool_cmd = "slither  {0} --json {1}".format(buggy_sc, result_file)
+                    tool_cmd = "slither {0} --json {1}".format(buggy_sc, result_file)
                     os.system(tool_cmd)
 
                 elif tool == "CrossFuzz":
                     tested_contract_names: list[str] = [
                         file["names"]
                         for file in contract_names_per_file
-                        if file["file"] == tail
+                        if file["file"] == buggy_sc_filename
                     ][0]
                     for contract_name in tested_contract_names:
                         result_file = (
                             tool_result_per_bug
                             + "/"
-                            + tail
+                            + buggy_sc_filename
                             + f".{contract_name}"
                             + ".json"
                         )
@@ -142,7 +149,7 @@ def evaluate_tools():
                                 contract_name,  # contract name, which is the contract to be fuzzed
                                 "0.5.12",  # solc_version
                                 "1000",  # max transaction length, e.g., 10
-                                "5",  # timeout, e.g., 60(s)
+                                "60",  # timeout, e.g., 60(s)
                                 result_file,
                                 "/usr/local/bin/solc",  # solc_path
                                 "auto",  # constructor_params_path
@@ -193,11 +200,19 @@ if __name__ == "__main__":
     # if sys.argv[1] in ("--help", "-h"):
     #     printUsage(sys.argv[0])
 
-    # tools = sys.argv[1].split(",")
+    tools = sys.argv[1].split(",")
+    # tools = ["Manticore"]
     # tools = ["Slither"]
-    tools = ["CrossFuzz"]
+    # tools = ["CrossFuzz"]
+
+    start = perf_counter()
+
     evaluate_tools()
     inspection.Inspect_results(tools)
+
+    end = perf_counter()
+
+    print(f"Total process cost {end - start} seconds")
 
     # else:
     # print("wrong number of parameters")

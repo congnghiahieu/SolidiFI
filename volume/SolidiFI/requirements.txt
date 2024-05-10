@@ -3,6 +3,8 @@
 ijson
 numpy
 configparser
+# mythril
+manticore
 # pandas
 -e .
 

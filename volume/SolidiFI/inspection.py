@@ -1,16 +1,21 @@
 #!/usr/bin/python3
 
 # import solidifi
-import os, sys
-import shutil, glob
 import csv
-import inject_file
-import re
+import glob
 import json
+import os
+import re
+import shutil
+import sys
+from typing import Dict, List, Set
+
 import pandas
+
+import inject_file
 from common_config import bug_types, contract_names_per_file, contract_orders
 
-reported_bugs = []
+tool_reported_bugs = []
 reported_non_injected = []
 tools = []
 # tools = ["Oyente", "Securify", "Mythril", "Smartcheck","Slither","Manticore"]
@@ -51,6 +56,47 @@ slither_bug_codes = [
             "reentrancy-eth",
             "reentrancy-unlimited-gas",
             "reentrancy-no-eth",
+        ],
+    },
+]
+crossfuzz_bug_codes = [
+    {
+        "bug": "Unhandled-Exceptions",
+        "codes": [
+            # "Integer Overflow",
+            # "Transaction Order Dependency",
+            # "Leaking Ether",
+            "Assertion Failure",
+            "Unchecked Return Value",
+            # "Block Dependency",
+        ],
+    },
+    {
+        "bug": "Re-entrancy",
+        "codes": [
+            # "Integer Overflow",
+            # "Transaction Order Dependency",
+            "Leaking Ether",
+            # "Assertion Failure",
+            # "Block Dependency",
+            "Reentrancy",
+        ],
+    },
+    {
+        "bug": "TOD",
+        "codes": [
+            "Assertion Failure",
+            "Integer Overflow",
+            "Transaction Order Dependency",
+        ],
+    },
+    {
+        "bug": "Overflow-Underflow",
+        "codes": [
+            # "Assertion Failure",
+            # "Block Dependency",
+            "Integer Overflow",
+            # "Transaction Order Dependency",
         ],
     },
 ]
@@ -103,7 +149,7 @@ thresholds = [
 
 
 def Inspect_results(_tools=[]):
-    global reported_bugs
+    global tool_reported_bugs
     tools = _tools
 
     oyente_FNs = []
@@ -111,6 +157,7 @@ def Inspect_results(_tools=[]):
     mythril_FNs = []
     smartcheck_FNs = []
     slither_FNs = []
+    crossfuzz_FNs = []
     manticore_FNs = []
 
     oyente_FPs = []
@@ -118,30 +165,36 @@ def Inspect_results(_tools=[]):
     mythril_FPs = []
     smartcheck_FPs = []
     slither_FPs = []
+    crossfuzz_FPs = []
     manticore_FPs = []
 
     for tool in tools:
-        tool_bugs = [bugs["bugs"] for bugs in bug_types if bugs["tool"] == tool]
-        for bug_type in tool_bugs[0]:
-            oyente_ibugs = 0
-            oyente_bug_fn = 0
-            oyente_misclas = 0
-            securify_ibugs = 0
-            securify_bug_fn = 0
-            securify_misclas = 0
-            mythril_ibugs = 0
-            mythril_bug_fn = 0
-            mythril_misclas = 0
-            smartcheck_ibugs = 0
-            smartcheck_bug_fn = 0
-            smartcheck_misclas = 0
-            slither_ibugs = 0
-            slither_bug_fn = 0
-            slither_misclas = 0
-            manticore_ibugs = 0
-            manticore_bug_fn = 0
-            manticore_misclas = 0
-            c = 0
+        tool_bugs = [bugs["bugs"] for bugs in bug_types if bugs["tool"] == tool][0]
+        for bug_type in tool_bugs:
+            oyente_injected_bugs = 0
+            oyente_bug_FNs = 0
+            oyente_miss_classified = 0
+            securify_injected_bugs = 0
+            securify_bug_FNs = 0
+            securify_miss_classified = 0
+            mythril_injected_bugs = 0
+            mythril_bug_FNs = 0
+            mythril_miss_classified = 0
+            smartcheck_injected_bugs = 0
+            smartcheck_bug_FNs = 0
+            smartcheck_miss_classified = 0
+            slither_injected_bugs = 0
+            slither_bug_FNs = 0
+            slither_miss_classified = 0
+            crossfuzz_injected_bugs = 0
+            crossfuzz_bug_FNs = 0
+            crossfuzz_miss_classified = 0
+            manticore_injected_bugs = 0
+            manticore_bug_FNs = 0
+            manticore_miss_classified = 0
+
+            # c = 0
+
             for contract_order in contract_orders:
                 tool_main_dir = os.path.join(main_dir, tool)
                 tool_buggy_sc = os.path.join(tool_main_dir, "analyzed_buggy_contracts")
@@ -159,16 +212,20 @@ def Inspect_results(_tools=[]):
                         + str(contract_order)
                         + ".sol.json"
                     )
+                # if tool in ("CrossFuzz"):
+                #     result_file = glob.glob(
+                #         injected_scs + f"/results/buggy_{contract_order}.sol.*.json"
+                #     )
 
                 # Read the injected bug logs
-                with open(bug_log, "r") as f:
-                    reader = csv.reader(f)
+                with open(bug_log, "r") as result_file_name:
+                    reader = csv.reader(result_file_name)
                     bug_log_list = list(reader)
 
                 # Inspect tool reports for false negatives and false positives positives
                 if tool == "Securify":
                     detected_bugs = []
-                    reported_bugs = []
+                    tool_reported_bugs = []
 
                     # ""locations of all violation patterns in the tool generated report""
                     violation_pattern = "Violation((.+)\s)+at\s"
@@ -181,10 +238,10 @@ def Inspect_results(_tools=[]):
 
                     # Inspect flase negatives
                     false_negatives = []
-                    misclassifications = []
+                    miss_classifications = []
                     tool_reported_bugs = [
                         bugs
-                        for bugs in reported_bugs
+                        for bugs in tool_reported_bugs
                         if bugs["tool"] == tool and bugs["contract"] == contract_order
                     ]
                     tool_bug_codes = [
@@ -193,45 +250,49 @@ def Inspect_results(_tools=[]):
                         if codes["bug"] == bug_type
                     ]
 
-                    for ibug in bug_log_list[1 : len(bug_log_list)]:
+                    for injected_bug in bug_log_list[1 : len(bug_log_list)]:
                         detected = False
-                        misclassified = False
-                        for dbug in tool_reported_bugs:
-                            if int(dbug["lines"]) >= int(ibug[0]) and int(
-                                dbug["lines"]
-                            ) < (int(ibug[0]) + int(ibug[1])):
+                        miss_classified = False
+                        for detected_bug in tool_reported_bugs:
+                            if int(detected_bug["lines"]) >= int(
+                                injected_bug[0]
+                            ) and int(detected_bug["lines"]) < (
+                                int(injected_bug[0]) + int(injected_bug[1])
+                            ):
                                 if (
-                                    dbug["bugType"].strip()
+                                    detected_bug["bugType"].strip()
                                     in tool_bug_codes[0]["codes"]
                                 ):
                                     detected = True
                                 else:
-                                    misclassified = True
+                                    miss_classified = True
                         if detected == False:
-                            false_negatives.append(ibug)
-                        if misclassified == True and detected == False:
-                            misclassifications.append(ibug)
+                            false_negatives.append(injected_bug)
+                        if miss_classified == True and detected == False:
+                            miss_classifications.append(injected_bug)
 
-                    securify_ibugs += len(bug_log_list) - 1
-                    securify_bug_fn += len(false_negatives)
-                    securify_misclas += len(misclassifications)
+                    securify_injected_bugs += len(bug_log_list) - 1
+                    securify_bug_FNs += len(false_negatives)
+                    securify_miss_classified += len(miss_classifications)
 
                     # Inspect flase positives
                     false_positives = []
-                    for dbug in tool_reported_bugs:
+                    for detected_bug in tool_reported_bugs:
 
                         injected = False
-                        for ibug in bug_log_list[1 : len(bug_log_list)]:
-                            if int(dbug["lines"]) >= int(ibug[0]) and int(
-                                dbug["lines"]
-                            ) < (int(ibug[0]) + int(ibug[1])):
+                        for injected_bug in bug_log_list[1 : len(bug_log_list)]:
+                            if int(detected_bug["lines"]) >= int(
+                                injected_bug[0]
+                            ) and int(detected_bug["lines"]) < (
+                                int(injected_bug[0]) + int(injected_bug[1])
+                            ):
                                 injected = True
                         if injected == False:
-                            reported_non_injected.append(dbug)
+                            reported_non_injected.append(detected_bug)
 
                 elif tool == "Mythril":
                     detected_bugs = []
-                    reported_bugs = []
+                    tool_reported_bugs = []
 
                     # ""locations of all reported bug patterns in the tool generated report""
                     violation_pattern = "===((.+)\s)+--"
@@ -243,65 +304,72 @@ def Inspect_results(_tools=[]):
 
                     # Inspect flase negatives
                     false_negatives = []
-                    misclassifications = []
+                    miss_classifications = []
                     tool_reported_bugs = [
                         bugs
-                        for bugs in reported_bugs
+                        for bugs in tool_reported_bugs
                         if bugs["tool"] == tool and bugs["contract"] == contract_order
                     ]
                     tool_bug_codes = [
                         codes for codes in mythril_bug_codes if codes["bug"] == bug_type
                     ]
 
-                    for ibug in bug_log_list[1 : len(bug_log_list)]:
+                    for injected_bug in bug_log_list[1 : len(bug_log_list)]:
                         detected = False
-                        misclassified = False
+                        miss_classified = False
 
-                        for dbug in tool_reported_bugs:
-                            if int(dbug["lines"]) >= int(ibug[0]) and int(
-                                dbug["lines"]
-                            ) < (int(ibug[0]) + int(ibug[1])):
+                        for detected_bug in tool_reported_bugs:
+                            if int(detected_bug["lines"]) >= int(
+                                injected_bug[0]
+                            ) and int(detected_bug["lines"]) < (
+                                int(injected_bug[0]) + int(injected_bug[1])
+                            ):
                                 if (
-                                    dbug["bugType"].strip()
+                                    detected_bug["bugType"].strip()
                                     in tool_bug_codes[0]["codes"]
                                 ):
                                     detected = True
                                 else:
-                                    misclassified = True
+                                    miss_classified = True
                         if detected == False:
-                            false_negatives.append(ibug)
-                        if misclassified == True and detected == False:
-                            misclassifications.append(ibug)
+                            false_negatives.append(injected_bug)
+                        if miss_classified == True and detected == False:
+                            miss_classifications.append(injected_bug)
 
-                    mythril_ibugs += len(bug_log_list) - 1
-                    mythril_bug_fn += len(false_negatives)
-                    mythril_misclas += len(misclassifications)
+                    mythril_injected_bugs += len(bug_log_list) - 1
+                    mythril_bug_FNs += len(false_negatives)
+                    mythril_miss_classified += len(miss_classifications)
 
                     # Inspect flase positives
-                    for dbug in tool_reported_bugs:
+                    for detected_bug in tool_reported_bugs:
                         injected = False
-                        for ibug in bug_log_list[1 : len(bug_log_list)]:
-                            if int(dbug["lines"]) >= int(ibug[0]) and int(
-                                dbug["lines"]
-                            ) < (int(ibug[0]) + int(ibug[1])):
+                        for injected_bug in bug_log_list[1 : len(bug_log_list)]:
+                            if int(detected_bug["lines"]) >= int(
+                                injected_bug[0]
+                            ) and int(detected_bug["lines"]) < (
+                                int(injected_bug[0]) + int(injected_bug[1])
+                            ):
                                 injected = True
                         if injected == False:
-                            reported_non_injected.append(dbug)
+                            reported_non_injected.append(detected_bug)
 
                 elif tool == "Slither":
-                    reported_bugs = []
+                    tool_reported_bugs = []
 
                     # ""locations of all reported bug patterns in the tool generated report""
-                    with open(result_file) as fh:
-                        result_file_data = json.loads(fh.read())
-                    violation_locs = get_all_childs(result_file_data)
+                    assert isinstance(result_file, str)
 
+                    with open(result_file) as f:
+                        result_errors_dict = json.loads(f.read())
+                    violation_locs = get_all_childs(result_errors_dict)
+
+                    # Take all the line that tool report as bug
                     for viol in violation_locs:
                         line = re.findall(r"(?<=sol#)[0-9]*(?=\))", viol["desc"])
                         if len(line) > 0:
                             bugLine = int(line[0])
                         bugType = viol["type"]
-                        reported_bugs.append(
+                        tool_reported_bugs.append(
                             {
                                 "tool": tool,
                                 "lines": bugLine,
@@ -310,57 +378,289 @@ def Inspect_results(_tools=[]):
                             }
                         )
 
-                    # Inspect flase negatives
+                    # Inspect false negatives
                     false_negatives = []
-                    misclassifications = []
+                    miss_classifications = []
                     tool_reported_bugs = [
                         bugs
-                        for bugs in reported_bugs
+                        for bugs in tool_reported_bugs
                         if bugs["tool"] == tool and bugs["contract"] == contract_order
                     ]
                     tool_bug_codes = [
                         codes for codes in slither_bug_codes if codes["bug"] == bug_type
                     ]
-                    for ibug in bug_log_list[1 : len(bug_log_list)]:
+
+                    for injected_bug in bug_log_list[1 : len(bug_log_list)]:
                         detected = False
-                        misclassified = False
-                        for dbug in tool_reported_bugs:
-                            if int(dbug["lines"]) >= int(ibug[0]) and int(
-                                dbug["lines"]
-                            ) < (int(ibug[0]) + int(ibug[1])):
+                        miss_classified = False
+                        for detected_bug in tool_reported_bugs:
+                            if int(detected_bug["lines"]) >= int(
+                                injected_bug[0]
+                            ) and int(detected_bug["lines"]) < (
+                                int(injected_bug[0]) + int(injected_bug[1])
+                            ):
                                 if (
-                                    dbug["bugType"].strip()
+                                    detected_bug["bugType"].strip()
                                     in tool_bug_codes[0]["codes"]
                                 ):
                                     detected = True
                                 else:
-                                    misclassified = True
+                                    miss_classified = True
 
                         if detected == False:
-                            false_negatives.append(ibug)
-                        if misclassified == True and detected == False:
-                            misclassifications.append(ibug)
+                            false_negatives.append(injected_bug)
+                        if miss_classified == True and detected == False:
+                            miss_classifications.append(injected_bug)
 
                     # print(false_negatives)
-                    slither_ibugs += len(bug_log_list) - 1
-                    slither_bug_fn += len(false_negatives)
-                    slither_misclas += len(misclassifications)
+                    slither_injected_bugs += len(bug_log_list) - 1
+                    slither_bug_FNs += len(false_negatives)
+                    slither_miss_classified += len(miss_classifications)
 
-                    # Inspect flase positives
+                    # Inspect false positives
                     false_positives = []
-                    for dbug in tool_reported_bugs:
+                    for detected_bug in tool_reported_bugs:
                         injected = False
-                        for ibug in bug_log_list[1 : len(bug_log_list)]:
-                            if int(dbug["lines"]) >= int(ibug[0]) and int(
-                                dbug["lines"]
-                            ) < (int(ibug[0]) + int(ibug[1])):
+                        for injected_bug in bug_log_list[1 : len(bug_log_list)]:
+                            if int(detected_bug["lines"]) >= int(
+                                injected_bug[0]
+                            ) and int(detected_bug["lines"]) < (
+                                int(injected_bug[0]) + int(injected_bug[1])
+                            ):
                                 injected = True
                         if injected == False:
-                            reported_non_injected.append(dbug)
+                            reported_non_injected.append(detected_bug)
+
+                elif tool == "CrossFuzz":
+                    tool_reported_bugs = []
+                    head, tail = os.path.split(buggy_sc)
+                    cs_names = [
+                        names["names"]
+                        for names in contract_names_per_file
+                        if names["file"] == tail
+                    ]
+                    for cs_name in cs_names[0]:
+                        result_file = (
+                            injected_scs
+                            + "/results/buggy_"
+                            + str(contract_order)
+                            + ".sol."
+                            + cs_name
+                            + ".json"
+                        )
+                        if not os.path.isfile(result_file):
+                            continue
+                        with open(result_file) as f:
+                            result_errors_dict: Dict[str, List[Dict]] = json.load(f)[
+                                cs_name
+                            ]["errors"]
+                        for key, crossfuzz_error_list in result_errors_dict.items():
+                            for crossfuzz_error in crossfuzz_error_list:
+                                tool_reported_bugs.append(
+                                    {
+                                        "tool": tool,
+                                        "lines": crossfuzz_error.get("line", None),
+                                        "bugType": crossfuzz_error["type"],
+                                        "contract": contract_order,
+                                        "contractName": cs_name,
+                                    }
+                                )
+                                
+                    # Inspect false negatives
+                    false_negatives = []
+                    miss_classifications = []
+                    tool_reported_bugs = [
+                        bugs
+                        for bugs in tool_reported_bugs
+                        if bugs["tool"] == tool and bugs["contract"] == contract_order
+                    ]
+                    tool_bug_codes = [
+                        codes
+                        for codes in crossfuzz_bug_codes
+                        if codes["bug"] == bug_type
+                    ]
+
+                    for injected_bug in bug_log_list[1 : len(bug_log_list)]:
+                        detected = False
+                        miss_classified = False
+                        for detected_bug in tool_reported_bugs:
+                            tool_bug_founded_line_number = (
+                                int(detected_bug["lines"])
+                                if detected_bug["lines"] is not None
+                                else None
+                            )
+
+                            if not tool_bug_founded_line_number:
+                                continue
+
+                            injected_bug_start_line = int(injected_bug[0])
+                            injected_bug_end_line = injected_bug_start_line + int(
+                                injected_bug[1]
+                            )
+                            if (
+                                injected_bug_start_line
+                                <= tool_bug_founded_line_number
+                                < injected_bug_end_line
+                            ):
+                                if (
+                                    detected_bug["bugType"].strip()
+                                    in tool_bug_codes[0]["codes"]
+                                ):
+                                    detected = True
+                                else:
+                                    miss_classified = True
+
+                        if detected == False:
+                            false_negatives.append(injected_bug)
+                        if miss_classified == True and detected == False:
+                            miss_classifications.append(injected_bug)
+
+                    # print(false_negatives)
+                    crossfuzz_injected_bugs += len(bug_log_list) - 1
+                    crossfuzz_bug_FNs += len(false_negatives)
+                    crossfuzz_miss_classified += len(miss_classifications)
+
+                    # Inspect false positives
+                    false_positives = []
+                    for detected_bug in tool_reported_bugs:
+                        injected = False
+
+                        for injected_bug in bug_log_list[1 : len(bug_log_list)]:
+                            tool_bug_founded_line_number = (
+                                int(detected_bug["lines"])
+                                if detected_bug["lines"] is not None
+                                else None
+                            )
+
+                            if not tool_bug_founded_line_number:
+                                continue
+
+                            injected_bug_start_line = int(injected_bug[0])
+                            injected_bug_end_line = injected_bug_start_line + int(
+                                injected_bug[1]
+                            )
+                            if (
+                                injected_bug_start_line
+                                <= tool_bug_founded_line_number
+                                < injected_bug_end_line
+                            ):
+                                injected = True
+
+                        if injected == False:
+                            reported_non_injected.append(detected_bug)
+
+                    # assert isinstance(result_file, list)
+                    # for crossfuzz_result_file in result_file:
+                    #     # ""locations of all reported bug patterns in the tool generated report""
+                    #     crossfuzz_result_filepath, crossfuzz_result_filename = (
+                    #         os.path.split(crossfuzz_result_file)
+                    #     )
+                    #     contract_name = crossfuzz_result_filename.split(".")[2]
+                    #     with open(crossfuzz_result_file) as f:
+                    #         result_errors_dict: Dict[str, List[Dict]] = json.load(f)[
+                    #             contract_name
+                    #         ]["errors"]
+
+                    #     # Take all the line that tool report as bug
+                    #     for key, crossfuzz_error_list in result_errors_dict.items():
+                    #         for crossfuzz_error in crossfuzz_error_list:
+                    #             tool_reported_bugs.append(
+                    #                 {
+                    #                     "tool": tool,
+                    #                     "lines": crossfuzz_error.get("line", None),
+                    #                     "bugType": crossfuzz_error["type"],
+                    #                     "contract": contract_order,
+                    #                     "contractName": contract_name,
+                    #                 }
+                    #             )
+
+                    #     # Inspect false negatives
+                    #     false_negatives = []
+                    #     miss_classifications = []
+                    #     tool_reported_bugs = [
+                    #         bugs
+                    #         for bugs in tool_reported_bugs
+                    #         if bugs["tool"] == tool
+                    #         and bugs["contract"] == contract_order
+                    #     ]
+                    #     tool_bug_codes = [
+                    #         codes
+                    #         for codes in crossfuzz_bug_codes
+                    #         if codes["bug"] == bug_type
+                    #     ]
+
+                    #     for injected_bug in bug_log_list[1 : len(bug_log_list)]:
+                    #         detected = False
+                    #         miss_classified = False
+                    #         for detected_bug in tool_reported_bugs:
+                    #             tool_bug_founded_line_number = (
+                    #                 int(detected_bug["lines"])
+                    #                 if detected_bug["lines"] is not None
+                    #                 else None
+                    #             )
+
+                    #             if not tool_bug_founded_line_number:
+                    #                 continue
+
+                    #             injected_bug_start_line = int(injected_bug[0])
+                    #             injected_bug_end_line = injected_bug_start_line + int(
+                    #                 injected_bug[1]
+                    #             )
+                    #             if (
+                    #                 injected_bug_start_line
+                    #                 <= tool_bug_founded_line_number
+                    #                 < injected_bug_end_line
+                    #             ):
+                    #                 if (
+                    #                     detected_bug["bugType"].strip()
+                    #                     in tool_bug_codes[0]["codes"]
+                    #                 ):
+                    #                     detected = True
+                    #                 else:
+                    #                     miss_classified = True
+
+                    #         if detected == False:
+                    #             false_negatives.append(injected_bug)
+                    #         if miss_classified == True and detected == False:
+                    #             miss_classifications.append(injected_bug)
+
+                    #     # print(false_negatives)
+                    #     crossfuzz_injected_bugs += len(bug_log_list) - 1
+                    #     crossfuzz_bug_FNs += len(false_negatives)
+                    #     crossfuzz_miss_classified += len(miss_classifications)
+
+                    #     # Inspect false positives
+                    #     false_positives = []
+                    #     for detected_bug in tool_reported_bugs:
+                    #         injected = False
+
+                    #         for injected_bug in bug_log_list[1 : len(bug_log_list)]:
+                    #             tool_bug_founded_line_number = (
+                    #                 int(detected_bug["lines"])
+                    #                 if detected_bug["lines"] is not None
+                    #                 else None
+                    #             )
+
+                    #             if not tool_bug_founded_line_number:
+                    #                 continue
+
+                    #             injected_bug_start_line = int(injected_bug[0])
+                    #             injected_bug_end_line = injected_bug_start_line + int(
+                    #                 injected_bug[1]
+                    #             )
+                    #             if (
+                    #                 injected_bug_start_line
+                    #                 <= tool_bug_founded_line_number
+                    #                 < injected_bug_end_line
+                    #             ):
+                    #                 injected = True
+
+                    #         if injected == False:
+                    #             reported_non_injected.append(detected_bug)
 
                 elif tool == "Smartcheck":
                     detected_bugs = []
-                    reported_bugs = []
+                    tool_reported_bugs = []
 
                     # ""locations of all reported bug patterns in the tool generated report""
                     violation_pattern = "ruleId((.+)\s)+line:\s[0-9]*"
@@ -374,11 +674,11 @@ def Inspect_results(_tools=[]):
 
                     # Inspect flase negatives
                     false_negatives = []
-                    misclassifications = []
+                    miss_classifications = []
 
                     tool_reported_bugs = [
                         bugs
-                        for bugs in reported_bugs
+                        for bugs in tool_reported_bugs
                         if bugs["tool"] == tool and bugs["contract"] == contract_order
                     ]
                     tool_bug_codes = [
@@ -387,45 +687,49 @@ def Inspect_results(_tools=[]):
                         if codes["bug"] == bug_type
                     ]
 
-                    for ibug in bug_log_list[1 : len(bug_log_list)]:
+                    for injected_bug in bug_log_list[1 : len(bug_log_list)]:
                         detected = False
-                        misclassified = False
-                        for dbug in tool_reported_bugs:
-                            if int(dbug["lines"]) >= int(ibug[0]) and int(
-                                dbug["lines"]
-                            ) < (int(ibug[0]) + int(ibug[1])):
+                        miss_classified = False
+                        for detected_bug in tool_reported_bugs:
+                            if int(detected_bug["lines"]) >= int(
+                                injected_bug[0]
+                            ) and int(detected_bug["lines"]) < (
+                                int(injected_bug[0]) + int(injected_bug[1])
+                            ):
                                 if (
-                                    dbug["bugType"].strip()
+                                    detected_bug["bugType"].strip()
                                     in tool_bug_codes[0]["codes"]
                                 ):
                                     detected = True
                                 else:
-                                    misclassified = True
+                                    miss_classified = True
 
                         if detected == False:
-                            false_negatives.append(ibug)
-                        if misclassified == True and detected == False:
-                            misclassifications.append(ibug)
+                            false_negatives.append(injected_bug)
+                        if miss_classified == True and detected == False:
+                            miss_classifications.append(injected_bug)
 
-                    smartcheck_ibugs += len(bug_log_list) - 1
-                    smartcheck_bug_fn += len(false_negatives)
-                    smartcheck_misclas += len(misclassifications)
+                    smartcheck_injected_bugs += len(bug_log_list) - 1
+                    smartcheck_bug_FNs += len(false_negatives)
+                    smartcheck_miss_classified += len(miss_classifications)
 
                     # Inspect flase positives
                     false_positives = []
-                    for dbug in tool_reported_bugs:
+                    for detected_bug in tool_reported_bugs:
                         injected = False
-                        for ibug in bug_log_list[1 : len(bug_log_list)]:
-                            if int(dbug["lines"]) >= int(ibug[0]) and int(
-                                dbug["lines"]
-                            ) < (int(ibug[0]) + int(ibug[1])):
+                        for injected_bug in bug_log_list[1 : len(bug_log_list)]:
+                            if int(detected_bug["lines"]) >= int(
+                                injected_bug[0]
+                            ) and int(detected_bug["lines"]) < (
+                                int(injected_bug[0]) + int(injected_bug[1])
+                            ):
                                 injected = True
                         if injected == False:
-                            reported_non_injected.append(dbug)
+                            reported_non_injected.append(detected_bug)
 
                 elif tool == "Oyente":
                     detected_bugs = []
-                    reported_bugs = []
+                    tool_reported_bugs = []
                     head, tail = os.path.split(buggy_sc)
 
                     # ""locations of all reported bug patterns in the tool generated report""
@@ -458,54 +762,58 @@ def Inspect_results(_tools=[]):
 
                     # Inspect flase negatives
                     false_negatives = []
-                    misclassifications = []
+                    miss_classifications = []
                     tool_reported_bugs = [
                         bugs
-                        for bugs in reported_bugs
+                        for bugs in tool_reported_bugs
                         if bugs["tool"] == tool and bugs["contract"] == contract_order
                     ]
                     tool_bug_codes = [
                         codes for codes in oyente_bug_codes if codes["bug"] == bug_type
                     ]
 
-                    for ibug in bug_log_list[1 : len(bug_log_list)]:
+                    for injected_bug in bug_log_list[1 : len(bug_log_list)]:
                         detected = False
-                        misclassified = False
-                        for dbug in tool_reported_bugs:
-                            if int(dbug["lines"]) >= int(ibug[0]) and int(
-                                dbug["lines"]
-                            ) < (int(ibug[0]) + int(ibug[1])):
+                        miss_classified = False
+                        for detected_bug in tool_reported_bugs:
+                            if int(detected_bug["lines"]) >= int(
+                                injected_bug[0]
+                            ) and int(detected_bug["lines"]) < (
+                                int(injected_bug[0]) + int(injected_bug[1])
+                            ):
                                 if (
-                                    dbug["bugType"].strip()
+                                    detected_bug["bugType"].strip()
                                     in tool_bug_codes[0]["codes"]
                                 ):
                                     detected = True
                                 else:
-                                    misclassified = True
+                                    miss_classified = True
                         if detected == False:
-                            false_negatives.append(ibug)
-                        if misclassified == True and detected == False:
-                            misclassifications.append(ibug)
+                            false_negatives.append(injected_bug)
+                        if miss_classified == True and detected == False:
+                            miss_classifications.append(injected_bug)
 
-                    oyente_ibugs += len(bug_log_list) - 1
-                    oyente_bug_fn += len(false_negatives)
-                    oyente_misclas += len(misclassifications)
+                    oyente_injected_bugs += len(bug_log_list) - 1
+                    oyente_bug_FNs += len(false_negatives)
+                    oyente_miss_classified += len(miss_classifications)
 
                     # Inspect flase positives
                     false_positives = []
-                    for dbug in tool_reported_bugs:
+                    for detected_bug in tool_reported_bugs:
                         injected = False
-                        for ibug in bug_log_list[1 : len(bug_log_list)]:
-                            if int(dbug["lines"]) >= int(ibug[0]) and int(
-                                dbug["lines"]
-                            ) < (int(ibug[0]) + int(ibug[1])):
+                        for injected_bug in bug_log_list[1 : len(bug_log_list)]:
+                            if int(detected_bug["lines"]) >= int(
+                                injected_bug[0]
+                            ) and int(detected_bug["lines"]) < (
+                                int(injected_bug[0]) + int(injected_bug[1])
+                            ):
                                 injected = True
                         if injected == False:
-                            reported_non_injected.append(dbug)
+                            reported_non_injected.append(detected_bug)
 
                 elif tool == "Manticore":
                     detected_bugs = []
-                    reported_bugs = []
+                    tool_reported_bugs = []
                     head, tail = os.path.split(buggy_sc)
 
                     # ""locations of all reported bug patterns in the tool generated report""
@@ -537,10 +845,10 @@ def Inspect_results(_tools=[]):
 
                     # Inspect flase negatives
                     false_negatives = []
-                    misclassifications = []
+                    miss_classifications = []
                     tool_reported_bugs = [
                         bugs
-                        for bugs in reported_bugs
+                        for bugs in tool_reported_bugs
                         if bugs["tool"] == tool and bugs["contract"] == contract_order
                     ]
                     tool_bug_codes = [
@@ -548,99 +856,114 @@ def Inspect_results(_tools=[]):
                         for codes in manticore_bug_codes
                         if codes["bug"] == bug_type
                     ]
-                    for ibug in bug_log_list[1 : len(bug_log_list)]:
+                    for injected_bug in bug_log_list[1 : len(bug_log_list)]:
                         detected = False
-                        misclassified = False
-                        for dbug in tool_reported_bugs:
-                            if int(dbug["lines"]) >= int(ibug[0]) and int(
-                                dbug["lines"]
-                            ) < (int(ibug[0]) + int(ibug[1])):
+                        miss_classified = False
+                        for detected_bug in tool_reported_bugs:
+                            if int(detected_bug["lines"]) >= int(
+                                injected_bug[0]
+                            ) and int(detected_bug["lines"]) < (
+                                int(injected_bug[0]) + int(injected_bug[1])
+                            ):
                                 if (
-                                    dbug["bugType"].strip()
+                                    detected_bug["bugType"].strip()
                                     in tool_bug_codes[0]["codes"]
                                 ):
                                     detected = True
                                 else:
-                                    misclassified = True
+                                    miss_classified = True
                         if detected == False:
-                            false_negatives.append(ibug)
-                        if misclassified == True and detected == False:
-                            misclassifications.append(ibug)
+                            false_negatives.append(injected_bug)
+                        if miss_classified == True and detected == False:
+                            miss_classifications.append(injected_bug)
 
-                    manticore_ibugs += len(bug_log_list) - 1
-                    manticore_bug_fn += len(false_negatives)
-                    manticore_misclas += len(misclassifications)
+                    manticore_injected_bugs += len(bug_log_list) - 1
+                    manticore_bug_FNs += len(false_negatives)
+                    manticore_miss_classified += len(miss_classifications)
 
                     # Inspect flase positives
                     false_positives = []
-                    for dbug in tool_reported_bugs:
+                    for detected_bug in tool_reported_bugs:
                         injected = False
-                        for ibug in bug_log_list[1 : len(bug_log_list)]:
-                            if int(dbug["lines"]) >= int(ibug[0]) and int(
-                                dbug["lines"]
-                            ) < (int(ibug[0]) + int(ibug[1])):
+                        for injected_bug in bug_log_list[1 : len(bug_log_list)]:
+                            if int(detected_bug["lines"]) >= int(
+                                injected_bug[0]
+                            ) and int(detected_bug["lines"]) < (
+                                int(injected_bug[0]) + int(injected_bug[1])
+                            ):
                                 injected = True
                         if injected == False:
-                            reported_non_injected.append(dbug)
+                            reported_non_injected.append(detected_bug)
 
+            # Append False Negative results
             if tool == "Oyente":
                 oyente_FNs.append(
                     {
                         "BugType": bug_type,
-                        "InjectedBugs": oyente_ibugs,
-                        "FalseNegatives": oyente_bug_fn,
-                        "MisClassified": oyente_misclas,
-                        "UnDetected": (oyente_bug_fn - oyente_misclas),
+                        "InjectedBugs": oyente_injected_bugs,
+                        "FalseNegatives": oyente_bug_FNs,
+                        "MissClassified": oyente_miss_classified,
+                        "UnDetected": (oyente_bug_FNs - oyente_miss_classified),
                     }
                 )
             elif tool == "Securify":
                 securify_FNs.append(
                     {
                         "BugType": bug_type,
-                        "InjectedBugs": securify_ibugs,
-                        "FalseNegatives": securify_bug_fn,
-                        "MisClassified": securify_misclas,
-                        "UnDetected": (securify_bug_fn - securify_misclas),
+                        "InjectedBugs": securify_injected_bugs,
+                        "FalseNegatives": securify_bug_FNs,
+                        "MissClassified": securify_miss_classified,
+                        "UnDetected": (securify_bug_FNs - securify_miss_classified),
                     }
                 )
             elif tool == "Mythril":
                 mythril_FNs.append(
                     {
                         "BugType": bug_type,
-                        "InjectedBugs": mythril_ibugs,
-                        "FalseNegatives": mythril_bug_fn,
-                        "MisClassified": mythril_misclas,
-                        "UnDetected": (mythril_bug_fn - mythril_misclas),
+                        "InjectedBugs": mythril_injected_bugs,
+                        "FalseNegatives": mythril_bug_FNs,
+                        "MissClassified": mythril_miss_classified,
+                        "UnDetected": (mythril_bug_FNs - mythril_miss_classified),
                     }
                 )
             elif tool == "Smartcheck":
                 smartcheck_FNs.append(
                     {
                         "BugType": bug_type,
-                        "InjectedBugs": smartcheck_ibugs,
-                        "FalseNegatives": smartcheck_bug_fn,
-                        "MisClassified": smartcheck_misclas,
-                        "UnDetected": (smartcheck_bug_fn - smartcheck_misclas),
+                        "InjectedBugs": smartcheck_injected_bugs,
+                        "FalseNegatives": smartcheck_bug_FNs,
+                        "MissClassified": smartcheck_miss_classified,
+                        "UnDetected": (smartcheck_bug_FNs - smartcheck_miss_classified),
                     }
                 )
             elif tool == "Slither":
                 slither_FNs.append(
                     {
                         "BugType": bug_type,
-                        "InjectedBugs": slither_ibugs,
-                        "FalseNegatives": slither_bug_fn,
-                        "MisClassified": slither_misclas,
-                        "UnDetected": (slither_bug_fn - slither_misclas),
+                        "InjectedBugs": slither_injected_bugs,
+                        "FalseNegatives": slither_bug_FNs,
+                        "MissClassified": slither_miss_classified,
+                        "UnDetected": (slither_bug_FNs - slither_miss_classified),
+                    }
+                )
+            elif tool == "CrossFuzz":
+                crossfuzz_FNs.append(
+                    {
+                        "BugType": bug_type,
+                        "InjectedBugs": crossfuzz_injected_bugs,
+                        "FalseNegatives": crossfuzz_bug_FNs,
+                        "MissClassified": crossfuzz_miss_classified,
+                        "UnDetected": (crossfuzz_bug_FNs - crossfuzz_miss_classified),
                     }
                 )
             elif tool == "Manticore":
                 manticore_FNs.append(
                     {
                         "BugType": bug_type,
-                        "InjectedBugs": manticore_ibugs,
-                        "FalseNegatives": manticore_bug_fn,
-                        "MisClassified": manticore_misclas,
-                        "UnDetected": (manticore_bug_fn - manticore_misclas),
+                        "InjectedBugs": manticore_injected_bugs,
+                        "FalseNegatives": manticore_bug_FNs,
+                        "MissClassified": manticore_miss_classified,
+                        "UnDetected": (manticore_bug_FNs - manticore_miss_classified),
                     }
                 )
 
@@ -649,7 +972,7 @@ def Inspect_results(_tools=[]):
         "BugType",
         "InjectedBugs",
         "FalseNegatives",
-        "MisClassified",
+        "MissClassified",
         "UnDetected",
     ]
     for tool in tools:
@@ -673,6 +996,9 @@ def Inspect_results(_tools=[]):
                         writer.writerow(data)
                 elif tool == "Slither":
                     for data in slither_FNs:
+                        writer.writerow(data)
+                elif tool == "CrossFuzz":
+                    for data in crossfuzz_FNs:
                         writer.writerow(data)
                 elif tool == "Manticore":
                     for data in manticore_FNs:
@@ -989,6 +1315,62 @@ def Inspect_results(_tools=[]):
                 }
             )
 
+        elif tool == "CrossFuzz":
+            tool_bugs = [bugs["bug"] for bugs in crossfuzz_bug_codes]
+            for bug in tool_bugs:
+                fp_count = 0
+                excluded = 0
+                other_count = 0
+                bug_type_threshold = [
+                    thr["threshold"] for thr in thresholds if thr["bug"] == bug
+                ][0]
+                for sc in contract_orders:
+                    type_specific_bugs = [
+                        bugs
+                        for bugs in coded_reported_non_injected
+                        if bugs["tool"] == tool
+                        and bugs["bugType"] == bug
+                        and bugs["contract"] == sc
+                    ]
+                    other_bugs = [
+                        bugs
+                        for bugs in coded_reported_non_injected
+                        if bugs["tool"] == tool
+                        and bugs["bugType"] not in tool_bugs
+                        and bugs["contract"] == sc
+                    ]
+                    other_count += len(other_bugs)
+
+                    for sbugs in type_specific_bugs:
+                        tools_deteced_bug = [
+                            bugs
+                            for bugs in coded_reported_non_injected
+                            if bugs["lines"] == sbugs["lines"]
+                            and bugs["bugType"] == bug
+                            and bugs["contract"] == sc
+                        ]
+                        if not len(tools_deteced_bug) >= bug_type_threshold:
+                            fp_count += 1
+                        else:
+                            excluded += 1
+
+                crossfuzz_FPs.append(
+                    {
+                        "BugType": bug,
+                        "FalsePositives": fp_count,
+                        "ExcludedByMajority": excluded,
+                        "Total": (fp_count + excluded),
+                    }
+                )
+            crossfuzz_FPs.append(
+                {
+                    "BugType": "Other",
+                    "FalsePositives": other_count,
+                    "ExcludedByMajority": 0,
+                    "Total": other_count,
+                }
+            )
+
         if tool == "Manticore":
             tool_bugs = [bugs["bug"] for bugs in manticore_bug_codes]
             for bug in tool_bugs:
@@ -1069,6 +1451,9 @@ def Inspect_results(_tools=[]):
                 elif tool == "Slither":
                     for data in slither_FPs:
                         writer.writerow(data)
+                elif tool == "CrossFuzz":
+                    for data in crossfuzz_FPs:
+                        writer.writerow(data)
                 elif tool == "Manticore":
                     for data in manticore_FPs:
                         writer.writerow(data)
@@ -1143,6 +1528,19 @@ def get_bug_type(bug_info):
 
         return bug_info["bugType"]
 
+    elif bug_info["tool"] == "CrossFuzz":
+        tool_bugs = [bugs["bug"] for bugs in crossfuzz_bug_codes]
+        for bugType in tool_bugs:
+            bug_codes = [
+                codes["codes"]
+                for codes in crossfuzz_bug_codes
+                if codes["bug"] == bugType
+            ]
+            if bug_info["bugType"] in bug_codes[0]:
+                return bugType
+
+        return bug_info["bugType"]
+
     elif bug_info["tool"] == "Manticore":
         tool_bugs = [bugs["bug"] for bugs in manticore_bug_codes]
         for bugType in tool_bugs:
@@ -1158,7 +1556,7 @@ def get_bug_type(bug_info):
 
 
 def extract_detected_bug(result_file, bug_info, tool, contract):
-    global reported_bugs
+    global tool_reported_bugs
 
     if tool == "Securify":
         bugLine = int(
@@ -1175,7 +1573,7 @@ def extract_detected_bug(result_file, bug_info, tool, contract):
             inject_file.get_snippet_at_line(result_file, bug_info["line"]),
         )[0]
 
-        reported_bugs.append(
+        tool_reported_bugs.append(
             {"tool": tool, "lines": bugLine, "bugType": bugType, "contract": contract}
         )
 
@@ -1195,7 +1593,7 @@ def extract_detected_bug(result_file, bug_info, tool, contract):
                 r"(?<== )(.*)(?= =)",
                 inject_file.get_snippet_at_line(result_file, int(bug_info["line"])),
             )[0]
-            reported_bugs.append(
+            tool_reported_bugs.append(
                 {
                     "tool": tool,
                     "lines": bugLine,
@@ -1220,7 +1618,7 @@ def extract_detected_bug(result_file, bug_info, tool, contract):
             r"(?<=ruleId:\s)(.*)",
             inject_file.get_snippet_at_line(result_file, int(bug_info["line"])),
         )[0]
-        reported_bugs.append(
+        tool_reported_bugs.append(
             {"tool": tool, "lines": bugLine, "bugType": bugType, "contract": contract}
         )
 
@@ -1237,7 +1635,7 @@ def extract_detected_bug(result_file, bug_info, tool, contract):
 
         s = inject_file.get_snippet_at_line(result_file, int(bug_info["line"]))[0:85]
         bugType = re.findall(r"(?<=Warning: )(.*)(?=\.\\)", s)[0]
-        reported_bugs.append(
+        tool_reported_bugs.append(
             {"tool": tool, "lines": bugLine, "bugType": bugType, "contract": contract}
         )
 
@@ -1255,7 +1653,7 @@ def extract_detected_bug(result_file, bug_info, tool, contract):
             r"(?<=-)(.*)(?= -)",
             inject_file.get_snippet_at_line(result_file, int(bug_info["line"])),
         )[0].strip()
-        reported_bugs.append(
+        tool_reported_bugs.append(
             {"tool": tool, "lines": bugLine, "bugType": bugType, "contract": contract}
         )
 
@@ -1286,6 +1684,7 @@ def extract(obj, arr, key):
             if isinstance(v, (dict, list)):
                 extract(v, arr, key)
             elif k == key:
+                # arr.append(v)
                 for k1, v1 in obj.items():
                     if k1 in ("description", "check"):
                         arr.append(v)
